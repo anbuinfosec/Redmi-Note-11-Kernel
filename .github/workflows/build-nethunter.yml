@@ -30,34 +30,25 @@ jobs:
 
       - name: Inject NetHunter & KSU Configs
         run: |
+          cd kernel
           # Find the defconfig file dynamically
-          DEFCONFIG_FILE=$(find kernel/arch/arm64/configs -name "spes-perf_defconfig")
+          DEFCONFIG_FILE=$(find arch/arm64/configs -name "spes-perf_defconfig")
           echo "Injecting configs into $DEFCONFIG_FILE"
           
-          # Append NetHunter and KSU specific configs to the defconfig
+          # Append reduced NetHunter and KSU specific configs to the defconfig
           cat <<EOF >> $DEFCONFIG_FILE
           
           # KernelSU Support
           CONFIG_KSU=y
           
-          # NetHunter WiFi & SDR Support
+          # Essential NetHunter WiFi Support
           CONFIG_MAC80211_INJECTION=y
           CONFIG_ATH9K_HTC=y
           CONFIG_RT2800USB=y
-          CONFIG_RTL8187=y
           CONFIG_RTL8192CU=y
-          CONFIG_USB_RTL8150=y
           CONFIG_USB_RTL8152=y
-          CONFIG_USB_USBNET=y
-          CONFIG_USB_NET_AX8817X=y
-          CONFIG_USB_NET_CDCETHER=y
-          CONFIG_USB_ACM=y
-          CONFIG_USB_SERIAL=y
-          CONFIG_USB_SERIAL_CH341=y
-          CONFIG_USB_SERIAL_CP210X=y
-          CONFIG_USB_SERIAL_FTDI_SIO=y
           
-          # HID Keyboard/Mouse Support (BadUSB)
+          # Essential HID Support (BadUSB)
           CONFIG_USB_HIDDEV=y
           CONFIG_UHID=y
           CONFIG_HID_APPLE=y
@@ -73,10 +64,13 @@ jobs:
           export SUBARCH=arm64
           export ARGS="O=out ARCH=arm64 CC=clang LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
           
-          # Generate the .config from our modified defconfig
+          # 1. Generate the .config from our modified defconfig
           make $ARGS spes-perf_defconfig
           
-          # Compile the kernel
+          # 2. FIX: Automatically resolve missing dependencies from injected configs
+          make $ARGS olddefconfig
+          
+          # 3. Compile the kernel
           make -j$(nproc --all) $ARGS
 
       - name: Package Kernel (AnyKernel3)
