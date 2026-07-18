@@ -1,4 +1,4 @@
-name: Build NetHunter Kernel (Spes)
+name: Build NetHunter + KSU Kernel (Spes)
 
 on:
   workflow_dispatch: # Allows you to manually trigger the build
@@ -22,14 +22,23 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
 
-      - name: Inject NetHunter Configs
+      - name: Patch KernelSU
         run: |
-          # Find the defconfig file dynamically (usually in arch/arm64/configs or a vendor subfolder)
+          cd kernel
+          # Automatically pulls and patches the latest KernelSU source into the kernel tree
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+
+      - name: Inject NetHunter & KSU Configs
+        run: |
+          # Find the defconfig file dynamically
           DEFCONFIG_FILE=$(find kernel/arch/arm64/configs -name "spes-perf_defconfig")
-          echo "Injecting NetHunter configs into $DEFCONFIG_FILE"
+          echo "Injecting configs into $DEFCONFIG_FILE"
           
-          # Append NetHunter specific configs to the defconfig
+          # Append NetHunter and KSU specific configs to the defconfig
           cat <<EOF >> $DEFCONFIG_FILE
+          
+          # KernelSU Support
+          CONFIG_KSU=y
           
           # NetHunter WiFi & SDR Support
           CONFIG_MAC80211_INJECTION=y
@@ -90,11 +99,10 @@ jobs:
           fi
           
           # Zip it up into a flashable file
-          zip -r9 NetHunter-Kernel-Spes.zip * -x .git README.md *placeholder
+          zip -r9 NetHunter-KSU-Kernel-Spes.zip * -x .git README.md *placeholder
           
       - name: Upload Flashable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: NetHunter-Kernel-Spes
-          path: ak3/NetHunter-Kernel-Spes.zip
-          
+          name: NetHunter-KSU-Kernel-Spes
+          path: ak3/NetHunter-KSU-Kernel-Spes.zip
