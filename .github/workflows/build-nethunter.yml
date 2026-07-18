@@ -38,8 +38,11 @@ jobs:
           # Append reduced NetHunter and KSU specific configs to the defconfig
           cat <<EOF >> $DEFCONFIG_FILE
           
-          # KernelSU Support
+          # KernelSU Support (Required hooks)
           CONFIG_KSU=y
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
           
           # Essential NetHunter WiFi Support
           CONFIG_MAC80211_INJECTION=y
@@ -62,16 +65,18 @@ jobs:
           # Define standard Android kernel compiler flags
           export ARCH=arm64
           export SUBARCH=arm64
-          export ARGS="O=out ARCH=arm64 CC=clang LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
           
-          # 1. Generate the .config from our modified defconfig
+          # FIX: Added KCFLAGS="-Wno-error" to prevent Proton Clang from halting on netfilter warnings
+          export ARGS="O=out ARCH=arm64 CC=clang LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS=-Wno-error"
+          
+          # Generate the .config from our modified defconfig
           make $ARGS spes-perf_defconfig
           
-          # 2. FIX: Automatically resolve missing dependencies from injected configs
+          # Automatically resolve missing dependencies from injected configs
           make $ARGS olddefconfig
           
-          # 3. Compile the kernel
-          make -j$(nproc --all) $ARGS
+          # Compile the kernel (WERROR=0 acts as a secondary failsafe against compiler panic)
+          make -j$(nproc --all) $ARGS WERROR=0
 
       - name: Package Kernel (AnyKernel3)
         run: |
