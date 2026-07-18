@@ -1,134 +1,99 @@
-name: Build NetHunter Kernel (Spes)
+name: Build NetHunter Kernel (spes)
 
 on:
-  workflow_dispatch: # Allows you to manually trigger the build
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
 
 jobs:
   build:
-    name: Build Kernel
     runs-on: ubuntu-22.04
+
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+
     steps:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            git curl wget zip unzip bc bison flex \
+            build-essential libssl-dev libelf-dev \
+            ccache python3 python-is-python3 \
+            device-tree-compiler rsync lld llvm \
+            libncurses5-dev libncurses-dev \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Restore ccache
+        uses: actions/cache@v4
         with:
-          path: kernel
+          path: ~/.ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: |
+            ccache-
 
-      - name: Setup Build Environment
+      - name: Clone Proton Clang
         run: |
-          sudo apt-get update
-          # FIX: Removed gcc-multilib, g++-multilib, and lib32* packages to fix the ARM cross-compiler conflict
-          sudo apt-get install -y bc bison build-essential ccache curl flex git gnupg gperf imagemagick liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-      - name: Download Proton Clang Toolchain
+      - name: Set Build Variables
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
-
-      - name: Apply NetHunter Patches & External Drivers
-        run: |
-          cd kernel
-          
-          # 1. Clone RTL8812AU driver into the realtek wireless directory
-          git clone --depth=1 -b v5.6.4.2 https://github.com/aircrack-ng/rtl8812au.git drivers/net/wireless/realtek/rtl8812au
-          
-          # 2. Hook the RTL8812AU driver into the kernel's Kconfig and Makefile
-          sed -i '$ a source "drivers/net/wireless/realtek/rtl8812au/Kconfig"' drivers/net/wireless/realtek/Kconfig
-          sed -i '$ a obj-$(CONFIG_RTL8812AU) += rtl8812au/' drivers/net/wireless/realtek/Makefile
-          
-          # 3. Attempt to apply a generic mac80211 injection patch 
-          # We use "|| echo" to prevent the workflow from dying if the kernel already has this patch or rejects it
-          wget -q https://raw.githubusercontent.com/kimocoder/mac80211_hwsim_injection/master/mac80211_injection.patch -O mac.patch
-          patch -p1 --forward < mac.patch || echo "mac80211 patch failed or already applied, continuing..."
+          echo "$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_PATH
 
       - name: Configure Kernel
         run: |
-          cd kernel
-          export PATH="$(pwd)/../clang/bin:$PATH"
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS=-Wno-error"
-          
-          # Defensive check to make sure the target configuration file exists
-          test -f arch/arm64/configs/spes-perf_defconfig || {
-            echo "spes-perf_defconfig not found"
-            exit 1
-          }
-          
-          # 1. Generate the initial .config
-          make $ARGS spes-perf_defconfig
-          
-          # 2. Inject NetHunter configs using the kernel's config script
-          echo "Enabling NetHunter, BadUSB, and KSU configs..."
-          
-          # Enable KernelSU (already physically present in Madara273's source)
-          scripts/config --file out/.config --enable KSU
-          scripts/config --file out/.config --enable KPROBES
-          scripts/config --file out/.config --enable HAVE_KPROBES
-          scripts/config --file out/.config --enable KPROBE_EVENTS
-          
-          # Enable WiFi & Injection Support
-          scripts/config --file out/.config --enable MAC80211_INJECTION
-          scripts/config --file out/.config --enable ATH9K_HTC
-          scripts/config --file out/.config --enable RT2800USB
-          scripts/config --file out/.config --enable RTL8192CU
-          scripts/config --file out/.config --enable USB_RTL8152
-          scripts/config --file out/.config --enable RTL8812AU
-          
-          # Enable HID Support (BadUSB)
-          scripts/config --file out/.config --enable USB_HIDDEV
-          scripts/config --file out/.config --enable UHID
-          scripts/config --file out/.config --enable HID_APPLE
-          
-          # 3. Automatically resolve missing dependencies from injected configs
-          make $ARGS olddefconfig
+          mkdir -p out
 
-      - name: Build Kernel and Save Logs
-        run: |
-          set -o pipefail
-          cd kernel
-          export PATH="$(pwd)/../clang/bin:$PATH"
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS=-Wno-error"
-          
-          # Compile the kernel using 2 jobs with verbose logs, capturing true exit codes
-          make -j2 V=1 $ARGS WERROR=0 2>&1 | tee ../build.log
+          make O=out \
+            ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            vendor/spes_defconfig
 
-      - name: Package Kernel (AnyKernel3)
-        if: success()
+      - name: Build Kernel
         run: |
-          git clone https://github.com/osm0sis/AnyKernel3.git ak3
-          cd ak3
-          
-          # Modify AnyKernel3 parameters for Redmi Note 11 (spes/spesn)
-          sed -i 's/device.name1=maguro/device.name1=spes/' anykernel.sh
-          sed -i 's/device.name2=toro/device.name2=spesn/' anykernel.sh
-          sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot|block=/dev/block/bootdevice/by-name/boot|' anykernel.sh
-          
-          # Safe validation check for the built kernel binary image
-          if [ -f ../kernel/out/arch/arm64/boot/Image.gz-dtb ]; then
-            cp ../kernel/out/arch/arm64/boot/Image.gz-dtb .
-          elif [ -f ../kernel/out/arch/arm64/boot/Image.gz ]; then
-            cp ../kernel/out/arch/arm64/boot/Image.gz .
-          elif [ -f ../kernel/out/arch/arm64/boot/Image ]; then
-            cp ../kernel/out/arch/arm64/boot/Image .
-          else
-            echo "No kernel image found!"
-            exit 1
-          fi
-          
-          # Zip it up into a flashable file
-          zip -r9 NetHunter-Kernel-Spes.zip * -x .git README.md *placeholder
-          
+          make -j$(nproc) \
+            O=out \
+            ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+      - name: Clone AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
+
+      - name: Prepare ZIP
+        run: |
+          cp out/arch/arm64/boot/Image AnyKernel3/ || true
+          cp out/arch/arm64/boot/Image.gz AnyKernel3/ || true
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/ || true
+          cp out/arch/arm64/boot/dtbo.img AnyKernel3/ || true
+
+      - name: Create Flashable ZIP
+        run: |
+          cd AnyKernel3
+          zip -r9 "../NetHunter-spes-${{ github.run_number }}.zip" ./*
+
+      - name: Upload Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-Image
+          path: |
+            out/arch/arm64/boot/Image*
+            out/arch/arm64/boot/dtbo.img
+
       - name: Upload Flashable ZIP
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: NetHunter-Kernel-Spes
-          path: ak3/NetHunter-Kernel-Spes.zip
-
-      - name: Upload Build Logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Kernel-Build-Log
-          path: build.log
+          name: NetHunter-spes
+          path: NetHunter-spes-${{ github.run_number }}.zip
