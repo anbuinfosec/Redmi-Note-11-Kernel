@@ -1,0 +1,100 @@
+name: Build NetHunter Kernel (Spes)
+
+on:
+  workflow_dispatch: # Allows you to manually trigger the build
+
+jobs:
+  build:
+    name: Build Kernel
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          path: kernel
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libwxgtk3.0-gtk3-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3
+
+      - name: Download Proton Clang Toolchain
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+
+      - name: Inject NetHunter Configs
+        run: |
+          # Find the defconfig file dynamically (usually in arch/arm64/configs or a vendor subfolder)
+          DEFCONFIG_FILE=$(find kernel/arch/arm64/configs -name "spes-perf_defconfig")
+          echo "Injecting NetHunter configs into $DEFCONFIG_FILE"
+          
+          # Append NetHunter specific configs to the defconfig
+          cat <<EOF >> $DEFCONFIG_FILE
+          
+          # NetHunter WiFi & SDR Support
+          CONFIG_MAC80211_INJECTION=y
+          CONFIG_ATH9K_HTC=y
+          CONFIG_RT2800USB=y
+          CONFIG_RTL8187=y
+          CONFIG_RTL8192CU=y
+          CONFIG_USB_RTL8150=y
+          CONFIG_USB_RTL8152=y
+          CONFIG_USB_USBNET=y
+          CONFIG_USB_NET_AX8817X=y
+          CONFIG_USB_NET_CDCETHER=y
+          CONFIG_USB_ACM=y
+          CONFIG_USB_SERIAL=y
+          CONFIG_USB_SERIAL_CH341=y
+          CONFIG_USB_SERIAL_CP210X=y
+          CONFIG_USB_SERIAL_FTDI_SIO=y
+          
+          # HID Keyboard/Mouse Support (BadUSB)
+          CONFIG_USB_HIDDEV=y
+          CONFIG_UHID=y
+          CONFIG_HID_APPLE=y
+          EOF
+
+      - name: Build Kernel
+        run: |
+          cd kernel
+          export PATH="$(pwd)/../clang/bin:$PATH"
+          
+          # Define standard Android kernel compiler flags
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export ARGS="O=out ARCH=arm64 CC=clang LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          
+          # Generate the .config from our modified defconfig
+          make $ARGS spes-perf_defconfig
+          
+          # Compile the kernel
+          make -j$(nproc --all) $ARGS
+
+      - name: Package Kernel (AnyKernel3)
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3.git ak3
+          cd ak3
+          
+          # Modify AnyKernel3 parameters for Redmi Note 11 (spes/spesn)
+          sed -i 's/device.name1=maguro/device.name1=spes/' anykernel.sh
+          sed -i 's/device.name2=toro/device.name2=spesn/' anykernel.sh
+          sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot|block=/dev/block/bootdevice/by-name/boot|' anykernel.sh
+          
+          # Automatically grab the correct compiled image type
+          if [ -f ../kernel/out/arch/arm64/boot/Image.gz-dtb ]; then
+            cp ../kernel/out/arch/arm64/boot/Image.gz-dtb .
+          elif [ -f ../kernel/out/arch/arm64/boot/Image.gz ]; then
+            cp ../kernel/out/arch/arm64/boot/Image.gz .
+          else
+            cp ../kernel/out/arch/arm64/boot/Image .
+          fi
+          
+          # Zip it up into a flashable file
+          zip -r9 NetHunter-Kernel-Spes.zip * -x .git README.md *placeholder
+          
+      - name: Upload Flashable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: NetHunter-Kernel-Spes
+          path: ak3/NetHunter-Kernel-Spes.zip
+          
