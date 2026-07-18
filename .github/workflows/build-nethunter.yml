@@ -1,4 +1,4 @@
-name: Build NetHunter Kernel (spes)
+name: Build Redmi Note 11 NetHunter Kernel
 
 on:
   workflow_dispatch:
@@ -6,94 +6,81 @@ on:
     branches:
       - main
       - master
+      - Neutrino_r05
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 180
 
     env:
-      ARCH: arm64
-      SUBARCH: arm64
+      TZ: Asia/Dhaka
+      CI: true
+      GITHUB_ACTIONS: true
 
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
-            git curl wget zip unzip bc bison flex \
-            build-essential libssl-dev libelf-dev \
-            ccache python3 python-is-python3 \
-            device-tree-compiler rsync lld llvm \
+            git curl wget zip unzip rsync bc bison flex \
+            build-essential ccache \
+            python3 python-is-python3 \
+            libssl-dev libelf-dev \
             libncurses5-dev libncurses-dev \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+            device-tree-compiler \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi \
+            clang lld llvm
 
-      - name: Restore ccache
+      - name: Enable ccache
         uses: actions/cache@v4
         with:
-          path: ~/.ccache
-          key: ccache-${{ github.sha }}
+          path: ~/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}
           restore-keys: |
-            ccache-
+            ccache-${{ runner.os }}-
 
-      - name: Clone Proton Clang
+      - name: Make build script executable
+        run: chmod +x build.sh
+
+      - name: Show repository
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+          pwd
+          ls -la
 
-      - name: Set Build Variables
+      - name: Build kernel
         run: |
-          echo "$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_PATH
+          bash ./build.sh
 
-      - name: Configure Kernel
+      - name: Collect artifacts
         run: |
-          mkdir -p out
+          mkdir artifacts
 
-          make O=out \
-            ARCH=arm64 \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            vendor/spes_defconfig
+          find . -type f \( \
+            -name "*.zip" -o \
+            -name "Image" -o \
+            -name "Image.gz" -o \
+            -name "Image.gz-dtb" -o \
+            -name "dtbo.img" -o \
+            -name "boot.img" -o \
+            -name "vendor_boot.img" \
+          \) -exec cp {} artifacts/ \; || true
 
-      - name: Build Kernel
-        run: |
-          make -j$(nproc) \
-            O=out \
-            ARCH=arm64 \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          find . -type f -name "*.log" -exec cp {} artifacts/ \; || true
 
-      - name: Clone AnyKernel3
-        run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
-
-      - name: Prepare ZIP
-        run: |
-          cp out/arch/arm64/boot/Image AnyKernel3/ || true
-          cp out/arch/arm64/boot/Image.gz AnyKernel3/ || true
-          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/ || true
-          cp out/arch/arm64/boot/dtbo.img AnyKernel3/ || true
-
-      - name: Create Flashable ZIP
-        run: |
-          cd AnyKernel3
-          zip -r9 "../NetHunter-spes-${{ github.run_number }}.zip" ./*
-
-      - name: Upload Image
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Image
-          path: |
-            out/arch/arm64/boot/Image*
-            out/arch/arm64/boot/dtbo.img
-
-      - name: Upload Flashable ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: NetHunter-spes
-          path: NetHunter-spes-${{ github.run_number }}.zip
+          name: Redmi-Note-11-Kernel
+          path: artifacts/
+          if-no-files-found: warn
